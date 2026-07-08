@@ -560,7 +560,7 @@ fun GimbalUi(viewModel: GimbalViewModel) {
                             }
                             .combinedClickable(
                                 enabled = connectionState == 2,
-                                onClick = { viewModel.addWaypoint() },
+                                onClick = { viewModel.addWaypointAt() },
                                 onLongClick = { viewModel.clearAllWaypoints() }
                             ),
                         contentAlignment = Alignment.Center
