@@ -164,20 +164,31 @@ class GimbalPathingService : Service() {
     private suspend fun CoroutineScope.executeSplineTravel(ble: GimbalBleManager, originalWaypoints: List<Waypoint>, durationSec: Int) {
         val adjustedPoints = originalWaypoints.toMutableList()
         for (i in 1 until adjustedPoints.size) {
-            adjustedPoints[i] = Waypoint(
+            adjustedPoints[i] = adjustedPoints[i].copy(
                 pitch = adjustedPoints[i - 1].pitch + normalizeAngle(adjustedPoints[i].pitch - adjustedPoints[i - 1].pitch),
                 yaw = adjustedPoints[i - 1].yaw + normalizeAngle(adjustedPoints[i].yaw - adjustedPoints[i - 1].yaw)
             )
         }
 
-        val distances = mutableListOf(0.0f)
-        var totalDist = 0.0f
+        val segmentWeights = FloatArray(adjustedPoints.size - 1)
+        var totalWeight = 0.0f
         for (i in 0 until adjustedPoints.size - 1) {
-            totalDist += sqrt(
+            val dist = kotlin.math.sqrt(
                 Math.pow((adjustedPoints[i + 1].yaw - adjustedPoints[i].yaw).toDouble(), 2.0) +
                 Math.pow((adjustedPoints[i + 1].pitch - adjustedPoints[i].pitch).toDouble(), 2.0)
             ).toFloat()
-            distances.add(totalDist)
+            
+            val safeDist = Math.max(0.1f, dist)
+            val mult = adjustedPoints[i + 1].timeMultiplier
+            
+            segmentWeights[i] = safeDist * mult
+            totalWeight += segmentWeights[i]
+        }
+
+        val accumulatedWeights = FloatArray(segmentWeights.size + 1)
+        accumulatedWeights[0] = 0.0f
+        for (i in 0 until segmentWeights.size) {
+            accumulatedWeights[i + 1] = accumulatedWeights[i] + segmentWeights[i]
         }
 
         val extendedPoints = listOf(adjustedPoints.first()) + adjustedPoints + adjustedPoints.last()
@@ -208,18 +219,20 @@ class GimbalPathingService : Service() {
             }
 
             val progress = elapsedMs.toFloat() / totalMs
-            val targetDist = progress * totalDist
+            val targetWeight = progress * totalWeight
 
             var segIdx = 0
-            for (j in 0 until distances.size - 1) {
-                if (targetDist >= distances[j] && targetDist <= distances[j + 1]) {
+            for (j in 0 until accumulatedWeights.size - 1) {
+                if (targetWeight >= accumulatedWeights[j] && targetWeight <= accumulatedWeights[j + 1]) {
                     segIdx = j
                     break
                 }
             }
+            if (segIdx >= accumulatedWeights.size - 1) segIdx = accumulatedWeights.size - 2
 
-            val segDist = distances[segIdx + 1] - distances[segIdx]
-            val u = if (segDist > 0) (targetDist - distances[segIdx]) / segDist else 0.0f
+            val weightInSeg = targetWeight - accumulatedWeights[segIdx]
+            val segTotalWeight = segmentWeights[segIdx]
+            val u = if (segTotalWeight > 0) (weightInSeg / segTotalWeight) else 0.0f
 
             val gY = SplineMath.getSplinePoint(extendedPoints[segIdx].yaw, extendedPoints[segIdx+1].yaw, extendedPoints[segIdx+2].yaw, extendedPoints[segIdx+3].yaw, u)
             val gP = SplineMath.getSplinePoint(extendedPoints[segIdx].pitch, extendedPoints[segIdx+1].pitch, extendedPoints[segIdx+2].pitch, extendedPoints[segIdx+3].pitch, u)

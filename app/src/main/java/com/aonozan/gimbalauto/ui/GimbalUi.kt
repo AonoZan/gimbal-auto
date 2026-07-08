@@ -25,6 +25,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -39,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -80,6 +85,10 @@ fun GimbalUi(viewModel: GimbalViewModel) {
     val isScanning by viewModel.isScanning.collectAsState()
     val currentProject by viewModel.currentProject.collectAsState()
     
+    // UI Expand / Multiplier States
+    var isPointsExpanded by remember { mutableStateOf(false) }
+    var selectedWaypointIndex by remember { mutableStateOf<Int?>(null) }
+
     // Menu & Dialog States
     var showMenuDialog by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
@@ -325,7 +334,19 @@ fun GimbalUi(viewModel: GimbalViewModel) {
             }
         }
 
-        // --- 3. Telemetry (Top Left, Minimalist text HUD) ---
+        // Expanded Points Overlayer (Centered above record button)
+        if (isPointsExpanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { isPointsExpanded = false }
+                        )
+                    }
+            )
+        }
+
         Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -463,33 +484,89 @@ fun GimbalUi(viewModel: GimbalViewModel) {
                 .navigationBarsPadding()
                 .padding(bottom = 32.dp, start = 24.dp, end = 24.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.Bottom
         ) {
-            // Menu Button (Left)
             IconButton(
                 onClick = { showMenuDialog = true },
-                modifier = Modifier.background(Color(0x66000000), CircleShape)
+                modifier = Modifier.padding(bottom = 8.dp).background(Color(0x66000000), CircleShape)
             ) {
                 Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
             }
 
-            // Camera Action Buttons (Center)
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                // Record Point Button
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .border(3.dp, Color.White, CircleShape)
-                        .padding(6.dp)
-                        .background(if (connectionState == 2) Color.White else Color.Gray, CircleShape)
-                        .combinedClickable(
-                            enabled = connectionState == 2,
-                            onClick = { viewModel.addWaypoint() },
-                            onLongClick = { viewModel.clearAllWaypoints() }
-                        ),
-                    contentAlignment = Alignment.Center
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Bottom
                 ) {
-                    Text("${waypoints.size}", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    AnimatedVisibility(
+                        visible = isPointsExpanded && waypoints.isNotEmpty(),
+                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    ) {
+                        Box(modifier = Modifier.height(IntrinsicSize.Min), contentAlignment = Alignment.Center) {
+                            Box(modifier = Modifier.width(2.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.5f)))
+                            
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            ) {
+                                waypoints.indices.reversed().forEach { index ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .background(if (index == selectedWaypointIndex) Color.Yellow else Color.DarkGray, CircleShape)
+                                            .border(2.dp, Color.White, CircleShape)
+                                            .clickable { selectedWaypointIndex = index },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "${index + 1}", 
+                                            color = if (index == selectedWaypointIndex) Color.Black else Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Multiplier drag / Record Box
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .border(3.dp, Color.White, CircleShape)
+                            .padding(6.dp)
+                            .background(if (connectionState == 2) Color.White else Color.Gray, CircleShape)
+                            .pointerInput(Unit) {
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    var totalDragY = 0f
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull()
+                                        if (change != null) {
+                                            totalDragY += change.positionChange().y
+                                            if (totalDragY < -15f) isPointsExpanded = true
+                                            if (totalDragY > 15f) isPointsExpanded = false
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                }
+                            }
+                            .combinedClickable(
+                                enabled = connectionState == 2,
+                                onClick = { viewModel.addWaypoint() },
+                                onLongClick = { viewModel.clearAllWaypoints() }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("${waypoints.size}", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    }
                 }
 
                 // Play Track Button
@@ -518,16 +595,47 @@ fun GimbalUi(viewModel: GimbalViewModel) {
                     videoFiles = loadVideoFiles(currentProject)
                     showGalleryDialog = true 
                 },
-                modifier = Modifier.background(Color(0x66000000), CircleShape)
+                modifier = Modifier.padding(bottom = 8.dp).background(Color(0x66000000), CircleShape)
             ) {
                 // Using standard List icon to act as Gallery/Library button
                 Icon(Icons.Default.List, contentDescription = "Gallery", tint = Color.White)
             }
         }
 
-        // --- Overlays & Dialogs ---
+        // Waypoint Speed Multiplier Dialog
+        val currentIndex = selectedWaypointIndex
+        if (currentIndex != null && currentIndex < waypoints.size) {
+            val wp = waypoints[currentIndex]
+            var sliderValue by remember(currentIndex) { mutableStateOf(wp.timeMultiplier) }
+            
+            AlertDialog(
+                onDismissRequest = { selectedWaypointIndex = null },
+                containerColor = Color(0xFF1E1E1E),
+                title = { Text("Point ${currentIndex + 1} Speed", color = Color.White) },
+                text = {
+                    Column {
+                        Text("Time Multiplier: ${String.format("%.1f", sliderValue)}x", color = Color.White)
+                        Slider(
+                            value = sliderValue,
+                            onValueChange = { sliderValue = it },
+                            valueRange = 0.5f..5.0f,
+                            steps = 44 
+                        )
+                        Text("Higher multiplier = Slower point approach.", color = Color.Gray, fontSize = 12.sp)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.updateWaypointMultiplier(currentIndex, sliderValue)
+                        selectedWaypointIndex = null
+                    }) { Text("Save", color = Color.White) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { selectedWaypointIndex = null }) { Text("Cancel", color = Color.Gray) }
+                }
+            )
+        }
 
-        // Countdown Overlay
         AnimatedVisibility(
             visible = countdown != null,
             enter = fadeIn() + scaleIn(),
@@ -622,7 +730,7 @@ fun GimbalUi(viewModel: GimbalViewModel) {
                                 useSound, 
                                 cameraMode, 
                                 timelapseInterval, 
-                                waypoints.map { WaypointData(it.yaw, it.pitch) }
+                                waypoints.map { WaypointData(it.yaw, it.pitch, it.timeMultiplier) }
                             )
                         )
                         showSaveDialog = false

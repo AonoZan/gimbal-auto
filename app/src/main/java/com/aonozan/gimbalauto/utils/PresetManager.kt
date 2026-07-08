@@ -24,7 +24,7 @@ data class GimbalPreset(
     val waypoints: List<WaypointData>
 )
 
-data class WaypointData(val yaw: Float, val pitch: Float)
+data class WaypointData(val yaw: Float, val pitch: Float, val timeMultiplier: Float = 1.0f)
 
 object PresetManager {
     private const val TAG = "PresetManager"
@@ -55,6 +55,7 @@ object PresetManager {
                     val wpObj = JSONObject()
                     wpObj.put("yaw", wp.yaw)
                     wpObj.put("pitch", wp.pitch)
+                    wpObj.put("timeMultiplier", wp.timeMultiplier.toDouble())
                     wpArray.put(wpObj)
                 }
                 put("waypoints", wpArray)
@@ -86,7 +87,8 @@ object PresetManager {
                             waypoints.add(
                                 WaypointData(
                                     yaw = wpObj.optDouble("yaw").toFloat(),
-                                    pitch = wpObj.optDouble("pitch").toFloat()
+                                    pitch = wpObj.optDouble("pitch").toFloat(),
+                                    timeMultiplier = wpObj.optDouble("timeMultiplier", 1.0).toFloat()
                                 )
                             )
                         }

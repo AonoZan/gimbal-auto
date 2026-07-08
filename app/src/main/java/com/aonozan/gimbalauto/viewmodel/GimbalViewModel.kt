@@ -120,7 +120,7 @@ class GimbalViewModel(application: Application) : AndroidViewModel(application) 
         _timelapseInterval.value = preset.timelapseInterval
         
         val loadedWaypoints = preset.waypoints.map { 
-            Waypoint(yaw = it.yaw, pitch = it.pitch) 
+            Waypoint(yaw = it.yaw, pitch = it.pitch, timeMultiplier = it.timeMultiplier) 
         }
         
         _waypoints.value = loadedWaypoints
@@ -179,6 +179,14 @@ class GimbalViewModel(application: Application) : AndroidViewModel(application) 
         pathingService?.cancelPathing()
         _isRunning.value = false
         _countdown.value = null
+    }
+
+    fun updateWaypointMultiplier(index: Int, multiplier: Float) {
+        val list = _waypoints.value.toMutableList()
+        if (index in list.indices) {
+            list[index] = list[index].copy(timeMultiplier = multiplier)
+            _waypoints.value = list
+        }
     }
 
     fun pausePathing() {
