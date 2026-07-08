@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
@@ -69,4 +70,6 @@ dependencies {
     
     // Kotlin Coroutines for high-performance BLE streaming
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
+    
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
 }
