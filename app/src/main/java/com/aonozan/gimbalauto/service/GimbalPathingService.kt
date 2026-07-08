@@ -22,7 +22,6 @@ import com.aonozan.gimbalauto.ble.GimbalBleManager
 import com.aonozan.gimbalauto.model.Waypoint
 import com.aonozan.gimbalauto.utils.SplineMath
 import kotlinx.coroutines.*
-import kotlin.math.sqrt
 
 class GimbalPathingService : Service() {
 
@@ -127,12 +126,8 @@ class GimbalPathingService : Service() {
 
             val distFromTarget = kotlin.math.sqrt((errY * errY + errP * errP).toDouble()).toFloat()
 
-            if (progress >= 1.0f && distFromTarget < 1.5f) {
-                break
-            }
-            if (elapsed > durationMs + 10000L) { // Safe fallback timeout (10 seconds after expected finish)
-                break
-            }
+            if (progress >= 1.0f && distFromTarget < 1.5f) break
+            if (elapsed > durationMs + 10000L) break
 
             val absErrY = Math.abs(errY)
             val absErrP = Math.abs(errP)
@@ -151,7 +146,6 @@ class GimbalPathingService : Service() {
             val speedMultY = Math.max(1.5f, Math.min(15.0f, absErrY * 1.2f))
             val speedMultP = Math.max(1.5f, Math.min(15.0f, absErrP * 1.2f))
 
-            // Reduced motor speed clamp from +/-500 to +/-200 to guarantee a smooth, non-violent start
             val speedY = Math.max(-100, Math.min(100, (sY * speedMultY).toInt())).toShort()
             val speedP = Math.max(-100, Math.min(100, (sP * speedMultP).toInt())).toShort()
 
@@ -170,7 +164,7 @@ class GimbalPathingService : Service() {
             )
         }
 
-        val segmentWeights = FloatArray(adjustedPoints.size - 1)
+       val segmentWeights = FloatArray(adjustedPoints.size - 1)
         var totalWeight = 0.0f
         for (i in 0 until adjustedPoints.size - 1) {
             val dist = kotlin.math.sqrt(
@@ -179,9 +173,10 @@ class GimbalPathingService : Service() {
             ).toFloat()
             
             val safeDist = Math.max(0.1f, dist)
-            val mult = adjustedPoints[i + 1].timeMultiplier
+            val m1 = adjustedPoints[i].timeMultiplier
+            val m2 = adjustedPoints[i + 1].timeMultiplier
             
-            segmentWeights[i] = safeDist * mult
+            segmentWeights[i] = safeDist * ((m1 + m2) / 2.0f)
             totalWeight += segmentWeights[i]
         }
 
@@ -198,6 +193,11 @@ class GimbalPathingService : Service() {
         var lastGhost = adjustedPoints.first()
         var lastSpeedY = 0.0f
         var lastSpeedP = 0.0f
+        val initialTele = ble.telemetry.value
+        var lastSeenTelemetryY = initialTele.second
+        var lastSeenTelemetryP = initialTele.first
+        var activeErrY = 0.0f
+        var activeErrP = 0.0f
 
         while (isActive) {
             val now = System.currentTimeMillis()
@@ -231,25 +231,62 @@ class GimbalPathingService : Service() {
             if (segIdx >= accumulatedWeights.size - 1) segIdx = accumulatedWeights.size - 2
 
             val weightInSeg = targetWeight - accumulatedWeights[segIdx]
-            val segTotalWeight = segmentWeights[segIdx]
-            val u = if (segTotalWeight > 0) (weightInSeg / segTotalWeight) else 0.0f
+
+            val m1 = adjustedPoints[segIdx].timeMultiplier
+            val m2 = adjustedPoints[segIdx + 1].timeMultiplier
+            val L = Math.max(0.1f, kotlin.math.sqrt(
+                Math.pow((adjustedPoints[segIdx + 1].yaw - adjustedPoints[segIdx].yaw).toDouble(), 2.0) +
+                Math.pow((adjustedPoints[segIdx + 1].pitch - adjustedPoints[segIdx].pitch).toDouble(), 2.0)
+            ).toFloat())
+            
+            val A = L * (m2 - m1) / 2.0f
+            val B = L * m1
+            val C = -weightInSeg
+            
+            var u = 0.0f
+            if (Math.abs(A) < 0.0001f) {
+                u = -C / B
+            } else {
+                val discriminant = B * B - 4 * A * C
+                if (discriminant >= 0) {
+                    u = (-B + kotlin.math.sqrt(discriminant)) / (2 * A)
+                }
+            }
+            u = Math.max(0.0f, Math.min(1.0f, u))
 
             val gY = SplineMath.getSplinePoint(extendedPoints[segIdx].yaw, extendedPoints[segIdx+1].yaw, extendedPoints[segIdx+2].yaw, extendedPoints[segIdx+3].yaw, u)
             val gP = SplineMath.getSplinePoint(extendedPoints[segIdx].pitch, extendedPoints[segIdx+1].pitch, extendedPoints[segIdx+2].pitch, extendedPoints[segIdx+3].pitch, u)
 
-            val gVelY = gY - lastGhost.yaw
-            val gVelP = gP - lastGhost.pitch
+            val gVelY = normalizeAngle(gY - lastGhost.yaw)
+            val gVelP = normalizeAngle(gP - lastGhost.pitch)
             lastGhost = Waypoint(pitch = gP, yaw = gY)
 
-            val curr = ble.telemetry.value
-            val errY = normalizeAngle(gY - curr.second)
-            val errP = normalizeAngle(gP - curr.first)
+            val currTele = ble.telemetry.value
+            if (currTele.second != lastSeenTelemetryY || currTele.first != lastSeenTelemetryP) {
+                activeErrY = normalizeAngle(gY - currTele.second)
+                activeErrP = normalizeAngle(gP - currTele.first)
+                
+                activeErrY = Math.max(-10f, Math.min(10f, activeErrY))
+                activeErrP = Math.max(-10f, Math.min(10f, activeErrP))
+                
+                lastSeenTelemetryY = currTele.second
+                lastSeenTelemetryP = currTele.first
+            }
 
-            val targetSpeedY = (gVelY * 25.0f * 15.0f) + (errY * 4.5f)
-            val targetSpeedP = (gVelP * 25.0f * 15.0f) + (errP * 4.5f)
+            val baseSpeedY = gVelY * 400.0f
+            val baseSpeedP = gVelP * 400.0f
 
-            val sY = (targetSpeedY * 0.4f) + (lastSpeedY * 0.6f)
-            val sP = (targetSpeedP * 0.4f) + (lastSpeedP * 0.6f)
+            val nudgeY = activeErrY * 5.0f
+            val nudgeP = activeErrP * 5.0f
+
+            val targetSpeedY = baseSpeedY + nudgeY
+            val targetSpeedP = baseSpeedP + nudgeP
+
+            activeErrY *= 0.88f
+            activeErrP *= 0.88f
+
+            val sY = (targetSpeedY * 0.15f) + (lastSpeedY * 0.85f)
+            val sP = (targetSpeedP * 0.15f) + (lastSpeedP * 0.85f)
             lastSpeedY = sY
             lastSpeedP = sP
 
