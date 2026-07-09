@@ -22,6 +22,7 @@ import com.aonozan.gimbalauto.ble.GimbalBleManager
 import com.aonozan.gimbalauto.model.Waypoint
 import com.aonozan.gimbalauto.utils.SplineMath
 import kotlinx.coroutines.*
+import kotlin.math.*
 
 class GimbalPathingService : Service() {
 
@@ -56,14 +57,13 @@ class GimbalPathingService : Service() {
         pathingJob?.cancel()
         pathingJob = serviceScope.launch {
             startForegroundNotification()
-
             ble.setGimbalMode(true)
             delay(500)
 
             moveHome(ble, waypoints.first())
 
             if (useDelay) {
-                for (sec in 5 downTo 1) {
+                (5 downTo 1).forEach { sec ->
                     onCountdown(sec)
                     delay(1000)
                 }
@@ -86,104 +86,69 @@ class GimbalPathingService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
-    fun pausePathing() {
-        isPaused = true
-    }
-
-    fun resumePathing() {
-        isPaused = false
-    }
+    fun pausePathing() { isPaused = true }
+    fun resumePathing() { isPaused = false }
 
     private suspend fun CoroutineScope.moveHome(ble: GimbalBleManager, home: Waypoint) {
         val startHomeTime = System.currentTimeMillis()
-        
-        val initialTelemetry = ble.telemetry.value
-        val startPitch = initialTelemetry.first
-        val startYaw = initialTelemetry.second
+        val (startPitch, startYaw) = ble.telemetry.value
 
         val diffY = normalizeAngle(home.yaw - startYaw)
         val diffP = normalizeAngle(home.pitch - startPitch)
-        val totalTravelDistance = kotlin.math.sqrt((diffY * diffY + diffP * diffP).toDouble()).toFloat()
-
-        val durationMs = Math.max(4000L, (totalTravelDistance * 1000f / 20f).toLong())
+        val durationMs = maxOf(4000L, (hypot(diffY, diffP) * 50f).toLong())
 
         var lastHomeSpeedY = 0.0f
         var lastHomeSpeedP = 0.0f
 
         while (isActive) {
             val elapsed = System.currentTimeMillis() - startHomeTime
-
-            val progress = Math.min(1.0f, elapsed.toFloat() / durationMs.toFloat())
+            val progress = (elapsed.toFloat() / durationMs.toFloat()).coerceAtMost(1.0f)
             val t = progress * progress * (3f - 2f * progress)
 
+            val targetYaw = startYaw + normalizeAngle(home.yaw - startYaw) * t
+            val targetPitch = startPitch + normalizeAngle(home.pitch - startPitch) * t
 
-            val currentTargetYaw = startYaw + normalizeAngle(home.yaw - startYaw) * t
-            val currentTargetPitch = startPitch + normalizeAngle(home.pitch - startPitch) * t
+            val (currP, currY) = ble.telemetry.value
+            val errY = normalizeAngle(targetYaw - currY)
+            val errP = normalizeAngle(targetPitch - currP)
 
-            val curr = ble.telemetry.value
-            val errY = normalizeAngle(currentTargetYaw - curr.second)
-            val errP = normalizeAngle(currentTargetPitch - curr.first)
+            if (progress >= 1.0f && hypot(errY, errP) < 1.5f || elapsed > durationMs + 10000L) break
 
-            val distFromTarget = kotlin.math.sqrt((errY * errY + errP * errP).toDouble()).toFloat()
+            val absErrY = abs(errY)
+            val absErrP = abs(errP)
 
-            if (progress >= 1.0f && distFromTarget < 1.5f) break
-            if (elapsed > durationMs + 10000L) break
+            lastHomeSpeedY = (errY * absErrY.coerceIn(2.0f, 4.5f)) + (lastHomeSpeedY * ((absErrY - 1.0f) / 10.0f).coerceIn(0.0f, 0.6f))
+            lastHomeSpeedP = (errP * absErrP.coerceIn(2.0f, 4.5f)) + (lastHomeSpeedP * ((absErrP - 1.0f) / 10.0f).coerceIn(0.0f, 0.6f))
 
-            val absErrY = Math.abs(errY)
-            val absErrP = Math.abs(errP)
-
-            val momentumY = Math.max(0.0f, Math.min(0.6f, (absErrY - 1.0f) / 10.0f))
-            val momentumP = Math.max(0.0f, Math.min(0.6f, (absErrP - 1.0f) / 10.0f))
-            
-            val pGainY = Math.max(2.0f, Math.min(4.5f, absErrY))
-            val pGainP = Math.max(2.0f, Math.min(4.5f, absErrP))
-            
-            val sY = (errY * pGainY) + (lastHomeSpeedY * momentumY)
-            val sP = (errP * pGainP) + (lastHomeSpeedP * momentumP)
-            lastHomeSpeedY = sY
-            lastHomeSpeedP = sP
-
-            val speedMultY = Math.max(1.5f, Math.min(15.0f, absErrY * 1.2f))
-            val speedMultP = Math.max(1.5f, Math.min(15.0f, absErrP * 1.2f))
-
-            val speedY = Math.max(-100, Math.min(100, (sY * speedMultY).toInt())).toShort()
-            val speedP = Math.max(-100, Math.min(100, (sP * speedMultP).toInt())).toShort()
-
-            ble.sendVelocityCommand(speedY, speedP)
+            ble.sendVelocityCommand(
+                (lastHomeSpeedY * (absErrY * 1.2f).coerceIn(1.5f, 15.0f)).toInt().coerceIn(-100, 100).toShort(),
+                (lastHomeSpeedP * (absErrP * 1.2f).coerceIn(1.5f, 15.0f)).toInt().coerceIn(-100, 100).toShort()
+            )
             delay(40)
         }
         ble.sendVelocityCommand(0, 0)
     }
 
     private suspend fun CoroutineScope.executeSplineTravel(ble: GimbalBleManager, originalWaypoints: List<Waypoint>, durationSec: Int) {
-        val adjustedPoints = originalWaypoints.toMutableList()
-        for (i in 1 until adjustedPoints.size) {
-            adjustedPoints[i] = adjustedPoints[i].copy(
-                pitch = adjustedPoints[i - 1].pitch + normalizeAngle(adjustedPoints[i].pitch - adjustedPoints[i - 1].pitch),
-                yaw = adjustedPoints[i - 1].yaw + normalizeAngle(adjustedPoints[i].yaw - adjustedPoints[i - 1].yaw)
-            )
+        val adjustedPoints = originalWaypoints.toMutableList().apply {
+            for (i in 1 until size) {
+                this[i] = this[i].copy(
+                    pitch = this[i - 1].pitch + normalizeAngle(this[i].pitch - this[i - 1].pitch),
+                    yaw = this[i - 1].yaw + normalizeAngle(this[i].yaw - this[i - 1].yaw)
+                )
+            }
         }
 
-       val segmentWeights = FloatArray(adjustedPoints.size - 1)
+        val segmentWeights = FloatArray(adjustedPoints.size - 1)
         var totalWeight = 0.0f
-        for (i in 0 until adjustedPoints.size - 1) {
-            val dist = kotlin.math.sqrt(
-                Math.pow((adjustedPoints[i + 1].yaw - adjustedPoints[i].yaw).toDouble(), 2.0) +
-                Math.pow((adjustedPoints[i + 1].pitch - adjustedPoints[i].pitch).toDouble(), 2.0)
-            ).toFloat()
-            
-            val safeDist = Math.max(0.1f, dist)
-            val m1 = adjustedPoints[i].timeMultiplier
-            val m2 = adjustedPoints[i + 1].timeMultiplier
-            
-            segmentWeights[i] = safeDist * ((m1 + m2) / 2.0f)
+        for (i in segmentWeights.indices) {
+            val dist = hypot(adjustedPoints[i + 1].yaw - adjustedPoints[i].yaw, adjustedPoints[i + 1].pitch - adjustedPoints[i].pitch)
+            segmentWeights[i] = maxOf(0.1f, dist) * ((adjustedPoints[i].timeMultiplier + adjustedPoints[i + 1].timeMultiplier) / 2.0f)
             totalWeight += segmentWeights[i]
         }
 
-        val accumulatedWeights = FloatArray(segmentWeights.size + 1)
-        accumulatedWeights[0] = 0.0f
-        for (i in 0 until segmentWeights.size) {
-            accumulatedWeights[i + 1] = accumulatedWeights[i] + segmentWeights[i]
+        val accumulatedWeights = FloatArray(segmentWeights.size + 1).apply {
+            for (i in segmentWeights.indices) this[i + 1] = this[i] + segmentWeights[i]
         }
 
         val extendedPoints = listOf(adjustedPoints.first()) + adjustedPoints + adjustedPoints.last()
@@ -193,9 +158,10 @@ class GimbalPathingService : Service() {
         var lastGhost = adjustedPoints.first()
         var lastSpeedY = 0.0f
         var lastSpeedP = 0.0f
-        val initialTele = ble.telemetry.value
-        var lastSeenTelemetryY = initialTele.second
-        var lastSeenTelemetryP = initialTele.first
+        
+        val (initialPitch, initialYaw) = ble.telemetry.value
+        var lastSeenTelemetryY = initialYaw
+        var lastSeenTelemetryP = initialPitch
         var activeErrY = 0.0f
         var activeErrP = 0.0f
 
@@ -204,10 +170,7 @@ class GimbalPathingService : Service() {
             val delta = now - lastTick
             lastTick = now
 
-            if (!isPaused) {
-                elapsedMs += delta
-            }
-
+            if (!isPaused) elapsedMs += delta
             if (elapsedMs >= totalMs) break
 
             if (isPaused) {
@@ -218,41 +181,22 @@ class GimbalPathingService : Service() {
                 continue
             }
 
-            val progress = elapsedMs.toFloat() / totalMs
-            val targetWeight = progress * totalWeight
-
-            var segIdx = 0
-            for (j in 0 until accumulatedWeights.size - 1) {
-                if (targetWeight >= accumulatedWeights[j] && targetWeight <= accumulatedWeights[j + 1]) {
-                    segIdx = j
-                    break
-                }
-            }
-            if (segIdx >= accumulatedWeights.size - 1) segIdx = accumulatedWeights.size - 2
-
+            val targetWeight = (elapsedMs.toFloat() / totalMs) * totalWeight
+            val segIdx = (accumulatedWeights.indexOfFirst { targetWeight <= it }.takeIf { it >= 0 }?.minus(1) ?: segmentWeights.lastIndex).coerceAtLeast(0)
             val weightInSeg = targetWeight - accumulatedWeights[segIdx]
 
             val m1 = adjustedPoints[segIdx].timeMultiplier
             val m2 = adjustedPoints[segIdx + 1].timeMultiplier
-            val L = Math.max(0.1f, kotlin.math.sqrt(
-                Math.pow((adjustedPoints[segIdx + 1].yaw - adjustedPoints[segIdx].yaw).toDouble(), 2.0) +
-                Math.pow((adjustedPoints[segIdx + 1].pitch - adjustedPoints[segIdx].pitch).toDouble(), 2.0)
-            ).toFloat())
+            val L = maxOf(0.1f, hypot(adjustedPoints[segIdx + 1].yaw - adjustedPoints[segIdx].yaw, adjustedPoints[segIdx + 1].pitch - adjustedPoints[segIdx].pitch))
             
             val A = L * (m2 - m1) / 2.0f
             val B = L * m1
             val C = -weightInSeg
             
-            var u = 0.0f
-            if (Math.abs(A) < 0.0001f) {
-                u = -C / B
-            } else {
+            val u = (if (abs(A) < 0.0001f) -C / B else {
                 val discriminant = B * B - 4 * A * C
-                if (discriminant >= 0) {
-                    u = (-B + kotlin.math.sqrt(discriminant)) / (2 * A)
-                }
-            }
-            u = Math.max(0.0f, Math.min(1.0f, u))
+                if (discriminant >= 0) (-B + sqrt(discriminant)) / (2 * A) else 0.0f
+            }).coerceIn(0.0f, 1.0f)
 
             val gY = SplineMath.getSplinePoint(extendedPoints[segIdx].yaw, extendedPoints[segIdx+1].yaw, extendedPoints[segIdx+2].yaw, extendedPoints[segIdx+3].yaw, u)
             val gP = SplineMath.getSplinePoint(extendedPoints[segIdx].pitch, extendedPoints[segIdx+1].pitch, extendedPoints[segIdx+2].pitch, extendedPoints[segIdx+3].pitch, u)
@@ -261,69 +205,46 @@ class GimbalPathingService : Service() {
             val gVelP = normalizeAngle(gP - lastGhost.pitch)
             lastGhost = Waypoint(pitch = gP, yaw = gY)
 
-            val currTele = ble.telemetry.value
-            if (currTele.second != lastSeenTelemetryY || currTele.first != lastSeenTelemetryP) {
-                activeErrY = normalizeAngle(gY - currTele.second)
-                activeErrP = normalizeAngle(gP - currTele.first)
-                
-                activeErrY = Math.max(-10f, Math.min(10f, activeErrY))
-                activeErrP = Math.max(-10f, Math.min(10f, activeErrP))
-                
-                lastSeenTelemetryY = currTele.second
-                lastSeenTelemetryP = currTele.first
+            val (currP, currY) = ble.telemetry.value
+            if (currY != lastSeenTelemetryY || currP != lastSeenTelemetryP) {
+                activeErrY = normalizeAngle(gY - currY).coerceIn(-10f, 10f)
+                activeErrP = normalizeAngle(gP - currP).coerceIn(-10f, 10f)
+                lastSeenTelemetryY = currY
+                lastSeenTelemetryP = currP
             }
 
-            val baseSpeedY = gVelY * 400.0f
-            val baseSpeedP = gVelP * 400.0f
-
-            val nudgeY = activeErrY * 5.0f
-            val nudgeP = activeErrP * 5.0f
-
-            val targetSpeedY = baseSpeedY + nudgeY
-            val targetSpeedP = baseSpeedP + nudgeP
+            lastSpeedY = ((gVelY * 400.0f + activeErrY * 5.0f) * 0.15f) + (lastSpeedY * 0.85f)
+            lastSpeedP = ((gVelP * 400.0f + activeErrP * 5.0f) * 0.15f) + (lastSpeedP * 0.85f)
 
             activeErrY *= 0.88f
             activeErrP *= 0.88f
 
-            val sY = (targetSpeedY * 0.15f) + (lastSpeedY * 0.85f)
-            val sP = (targetSpeedP * 0.15f) + (lastSpeedP * 0.85f)
-            lastSpeedY = sY
-            lastSpeedP = sP
-
-            val speedY = Math.max(-500, Math.min(500, sY.toInt())).toShort()
-            val speedP = Math.max(-500, Math.min(500, sP.toInt())).toShort()
-
-            ble.sendVelocityCommand(speedY, speedP)
+            ble.sendVelocityCommand(
+                lastSpeedY.toInt().coerceIn(-500, 500).toShort(),
+                lastSpeedP.toInt().coerceIn(-500, 500).toShort()
+            )
             delay(40)
         }
     }
 
-    private fun normalizeAngle(angle: Float): Float {
-        var a = angle
-        while (a > 180f) a -= 360f
-        while (a < -180f) a += 360f
-        return a
-    }
+    private fun normalizeAngle(angle: Float): Float = ((angle + 180f).mod(360f) - 180f)
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val chan = NotificationChannel("gimbal_path", "Gimbal Controller Active", NotificationManager.IMPORTANCE_LOW)
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(chan)
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+                NotificationChannel("gimbal_path", "Gimbal Controller Active", NotificationManager.IMPORTANCE_LOW)
+            )
         }
     }
 
     private fun startForegroundNotification() {
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
-
+        val pendingIntent = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val notification = NotificationCompat.Builder(this, "gimbal_path")
             .setContentTitle("Gimbal Pathing Active")
             .setContentText("The gimbal is currently executing your spline path.")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pendingIntent)
             .build()
-
         startForeground(1001, notification)
     }
 
