@@ -1,26 +1,15 @@
-/*
- * Copyright (c) 2026 Dejan Petrovic <7921470+AonoZan@users.noreply.github.com>
- * * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- */
-
 package com.aonozan.gimbalauto.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Environment
-import android.widget.MediaController
 import android.widget.Toast
-import android.widget.VideoView
 import androidx.camera.video.*
 import androidx.compose.animation.*
 import androidx.compose.foundation.Canvas
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,8 +18,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -48,10 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.aonozan.gimbalauto.utils.GimbalPreset
 import com.aonozan.gimbalauto.utils.PresetManager
@@ -94,10 +79,7 @@ fun GimbalUi(viewModel: GimbalViewModel) {
     var showSaveDialog by remember { mutableStateOf(false) }
     var showLoadDialog by remember { mutableStateOf(false) }
     var showProjectDialog by remember { mutableStateOf(false) }
-    var presetNameInput by remember { mutableStateOf("") }
-    var newProjectInput by remember { mutableStateOf("") }
     var savedPresets by remember { mutableStateOf(listOf<GimbalPreset>()) }
-    var macAddressInput by remember { mutableStateOf("C6:B7:1A:06:2D:D3") }
 
     // Video Recording State
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
@@ -606,32 +588,13 @@ fun GimbalUi(viewModel: GimbalViewModel) {
         val currentIndex = selectedWaypointIndex
         if (currentIndex != null && currentIndex < waypoints.size) {
             val wp = waypoints[currentIndex]
-            var sliderValue by remember(currentIndex) { mutableStateOf(wp.timeMultiplier) }
-            
-            AlertDialog(
-                onDismissRequest = { selectedWaypointIndex = null },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Point ${currentIndex + 1} Speed", color = Color.White) },
-                text = {
-                    Column {
-                        Text("Time Multiplier: ${String.format("%.1f", sliderValue)}x", color = Color.White)
-                        Slider(
-                            value = sliderValue,
-                            onValueChange = { sliderValue = it },
-                            valueRange = 0.5f..5.0f,
-                            steps = 44 
-                        )
-                        Text("Higher multiplier = Slower point approach.", color = Color.Gray, fontSize = 12.sp)
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.updateWaypointMultiplier(currentIndex, sliderValue)
-                        selectedWaypointIndex = null
-                    }) { Text("Save", color = Color.White) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { selectedWaypointIndex = null }) { Text("Cancel", color = Color.Gray) }
+            WaypointSpeedDialog(
+                currentIndex = currentIndex,
+                initialMultiplier = wp.timeMultiplier,
+                onDismiss = { selectedWaypointIndex = null },
+                onSave = { multiplier ->
+                    viewModel.updateWaypointMultiplier(currentIndex, multiplier)
+                    selectedWaypointIndex = null
                 }
             )
         }
@@ -652,463 +615,135 @@ fun GimbalUi(viewModel: GimbalViewModel) {
 
         // Main Settings & Path Menu
         if (showMenuDialog) {
-            AlertDialog(
-                onDismissRequest = { showMenuDialog = false },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Menu Options", color = Color.White) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        
-                        // Connection Section (Disconnect only in menu)
-                        if (connectionState == 2) {
-                            Text("GIMBAL CONNECTION", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Button(
-                                onClick = { viewModel.disconnectGimbal() },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF424242)),
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text("Disconnect Gimbal") }
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("PROJECT MANAGEMENT", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        
-                        Button(
-                            onClick = { showMenuDialog = false; showProjectDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F51B5)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("Project: $currentProject (Change)") }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("PATH MANAGEMENT", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        
-                        Button(
-                            onClick = { showMenuDialog = false; showSaveDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF673AB7)),
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = waypoints.isNotEmpty()
-                        ) { Text("Save Current Path") }
-                        
-                        Button(
-                            onClick = { 
-                                savedPresets = PresetManager.loadPresets()
-                                showMenuDialog = false
-                                showLoadDialog = true 
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF009688)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("Browse / Load Paths") }
-                    }
+            MenuDialog(
+                connectionState = connectionState,
+                currentProject = currentProject,
+                waypointsNotEmpty = waypoints.isNotEmpty(),
+                onDisconnect = { viewModel.disconnectGimbal() },
+                onChangeProject = {
+                    showMenuDialog = false
+                    showProjectDialog = true
                 },
-                confirmButton = { TextButton(onClick = { showMenuDialog = false }) { Text("Close", color = Color.White) } }
+                onSavePath = {
+                    showMenuDialog = false
+                    showSaveDialog = true
+                },
+                onLoadPath = {
+                    savedPresets = PresetManager.loadPresets()
+                    showMenuDialog = false
+                    showLoadDialog = true
+                },
+                onDismiss = { showMenuDialog = false }
             )
         }
 
         // Save Path Dialog
         if (showSaveDialog) {
-            AlertDialog(
-                onDismissRequest = { showSaveDialog = false },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Save Path Preset", color = Color.White) },
-                text = {
-                    OutlinedTextField(
-                        value = presetNameInput,
-                        onValueChange = { presetNameInput = it },
-                        label = { Text("Preset Name", color = Color.LightGray) },
-                        colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White),
-                        singleLine = true
-                    )
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        val finalName = presetNameInput.ifBlank { "Preset_${System.currentTimeMillis()}" }
-                        PresetManager.savePreset(
-                            GimbalPreset(
-                                finalName, 
-                                totalTime, 
-                                useDelay, 
-                                useSound, 
-                                cameraMode, 
-                                timelapseInterval, 
-                                waypoints.map { WaypointData(it.yaw, it.pitch, it.timeMultiplier) }
-                            )
+            SavePathDialog(
+                onDismiss = { showSaveDialog = false },
+                onSave = { inputName ->
+                    val finalName = inputName.ifBlank { "Preset_${System.currentTimeMillis()}" }
+                    PresetManager.savePreset(
+                        GimbalPreset(
+                            finalName, 
+                            totalTime, 
+                            useDelay, 
+                            useSound, 
+                            cameraMode, 
+                            timelapseInterval, 
+                            waypoints.map { WaypointData(it.yaw, it.pitch, it.timeMultiplier) }
                         )
-                        showSaveDialog = false
-                        presetNameInput = ""
-                    }) { Text("Save") }
-                },
-                dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text("Cancel", color = Color.Gray) } }
+                    )
+                    showSaveDialog = false
+                }
             )
         }
 
         // Load Path Dialog
         if (showLoadDialog) {
-            AlertDialog(
-                onDismissRequest = { showLoadDialog = false },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Load Path Preset", color = Color.White) },
-                text = {
-                    if (savedPresets.isEmpty()) {
-                        Text("No presets found.", color = Color.Gray)
-                    } else {
-                        LazyColumn {
-                            items(savedPresets) { preset ->
-                                Card(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                                        .clickable { viewModel.applyPreset(preset); showLoadDialog = false },
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A2A))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(preset.name, color = Color.White, fontWeight = FontWeight.Bold)
-                                            Text("${preset.waypoints.size} Pts | ${preset.totalTime}s | ${preset.cameraMode}", color = Color.Gray, fontSize = 12.sp)
-                                        }
-                                        IconButton(onClick = { 
-                                            if (PresetManager.deletePreset(preset.name)) savedPresets = PresetManager.loadPresets()
-                                        }) { Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFEF5350)) }
-                                    }
-                                }
-                            }
-                        }
+            LoadPathDialog(
+                savedPresets = savedPresets,
+                onLoad = { preset ->
+                    viewModel.applyPreset(preset)
+                    showLoadDialog = false
+                },
+                onDelete = { preset ->
+                    if (PresetManager.deletePreset(preset.name)) {
+                        savedPresets = PresetManager.loadPresets()
                     }
                 },
-                confirmButton = { TextButton(onClick = { showLoadDialog = false }) { Text("Close", color = Color.White) } }
+                onDismiss = { showLoadDialog = false }
             )
         }
 
         // Video Gallery Dialog
         if (showGalleryDialog) {
-            AlertDialog(
-                onDismissRequest = { showGalleryDialog = false },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Video Gallery", color = Color.White) },
-                text = {
-                    if (videoFiles.isEmpty()) {
-                        Text("No media found in DCIM/GimbalAutoPaths.", color = Color.Gray)
+            VideoGalleryDialog(
+                videoFiles = videoFiles,
+                onSelectFile = { file -> previewVideoFile = file },
+                onSelectDir = { file -> previewTimelapseDir = file },
+                onDeleteFile = { file ->
+                    if (file.isDirectory) {
+                        file.deleteRecursively()
                     } else {
-                        LazyColumn {
-                            items(videoFiles) { file ->
-                                Card(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
-                                        if (file.isDirectory) {
-                                            previewTimelapseDir = file
-                                        } else {
-                                            previewVideoFile = file
-                                        }
-                                    },
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A2A))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            val isTimelapse = file.isDirectory
-                                            Text(if (isTimelapse) "Timelapse (${file.listFiles()?.size ?: 0} imgs)" else file.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                            val sizeLabel = if (isTimelapse) {
-                                                val totalSize = file.listFiles()?.sumOf { it.length() } ?: 0L
-                                                "${totalSize / (1024 * 1024)} MB"
-                                            } else {
-                                                "${file.length() / (1024 * 1024)} MB"
-                                            }
-                                            Text(sizeLabel, color = Color.Gray, fontSize = 12.sp)
-                                        }
-                                        IconButton(onClick = { 
-                                            if (file.isDirectory) {
-                                                file.deleteRecursively()
-                                            } else {
-                                                file.delete()
-                                            }
-                                            videoFiles = loadVideoFiles(currentProject)
-                                            Toast.makeText(context, "Deleted", Toast.LENGTH_SHORT).show()
-                                        }) { Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red) }
-                                    }
-                                }
-                            }
-                        }
+                        file.delete()
                     }
+                    videoFiles = loadVideoFiles(currentProject)
+                    Toast.makeText(context, "Deleted", Toast.LENGTH_SHORT).show()
                 },
-                confirmButton = { TextButton(onClick = { showGalleryDialog = false }) { Text("Close", color = Color.White) } }
+                onDismiss = { showGalleryDialog = false }
             )
         }
 
         // Video Preview Dialog
         if (previewVideoFile != null) {
-            AlertDialog(
-                onDismissRequest = { previewVideoFile = null },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Playback", fontSize = 16.sp, color = Color.White) },
-                text = {
-                    Box(modifier = Modifier.fillMaxWidth().height(300.dp).background(Color.Black)) {
-                        AndroidView(
-                            factory = { ctx ->
-                                VideoView(ctx).apply {
-                                    setVideoPath(previewVideoFile!!.absolutePath)
-                                    val mediaController = MediaController(ctx)
-                                    mediaController.setAnchorView(this)
-                                    setMediaController(mediaController)
-                                    start()
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                },
-                confirmButton = { TextButton(onClick = { previewVideoFile = null }) { Text("Close", color = Color.White) } }
+            VideoPreviewDialog(
+                previewVideoFile = previewVideoFile!!,
+                onDismiss = { previewVideoFile = null }
             )
         }
 
         // Timelapse Preview Dialog
         if (previewTimelapseDir != null) {
-            val images = remember(previewTimelapseDir) {
-                previewTimelapseDir!!.listFiles { file -> file.extension == "jpg" }?.sortedBy { it.name } ?: emptyList()
-            }
-            var currentIndex by remember { mutableStateOf(0) }
-            
-            AlertDialog(
-                onDismissRequest = { previewTimelapseDir = null },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Timelapse Skimmer", fontSize = 16.sp, color = Color.White) },
-                text = {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (images.isNotEmpty()) {
-                            Box(modifier = Modifier.fillMaxWidth().height(300.dp).background(Color.Black), contentAlignment = Alignment.Center) {
-                                val currentImage = images[currentIndex]
-                                val bitmap = remember(currentImage) {
-                                    val bmp = android.graphics.BitmapFactory.decodeFile(currentImage.absolutePath)
-                                    if (bmp != null) {
-                                        val exif = android.media.ExifInterface(currentImage.absolutePath)
-                                        val orientation = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
-                                        val matrix = android.graphics.Matrix()
-                                        when (orientation) {
-                                            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                                            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                                            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                                        }
-                                        if (orientation != android.media.ExifInterface.ORIENTATION_NORMAL && orientation != android.media.ExifInterface.ORIENTATION_UNDEFINED) {
-                                            android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
-                                        } else bmp
-                                    } else null
-                                }
-                                if (bitmap != null) {
-                                    androidx.compose.foundation.Image(
-                                        bitmap = bitmap.asImageBitmap(),
-                                        contentDescription = "Timelapse Image",
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    Text("Error loading image", color = Color.Red)
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Slider(
-                                value = currentIndex.toFloat(),
-                                onValueChange = { currentIndex = it.toInt() },
-                                valueRange = 0f..(images.size - 1).coerceAtLeast(0).toFloat(),
-                                steps = if (images.size > 2) images.size - 2 else 0
-                            )
-                            Text("${currentIndex + 1} / ${images.size}", color = Color.White)
-                        } else {
-                            Text("No images in this timelapse.", color = Color.Gray)
-                        }
-                    }
-                },
-                confirmButton = { TextButton(onClick = { previewTimelapseDir = null }) { Text("Close", color = Color.White) } }
+            TimelapsePreviewDialog(
+                previewTimelapseDir = previewTimelapseDir!!,
+                onDismiss = { previewTimelapseDir = null }
             )
         }
 
         // Device Picker Dialog
         if (showDevicePicker) {
-            AlertDialog(
-                onDismissRequest = { 
+            DevicePickerDialog(
+                scannedDevices = scannedDevices,
+                isScanning = isScanning,
+                onDeviceSelected = { device ->
+                    viewModel.stopScan()
+                    viewModel.connectGimbal(device.address)
+                    showDevicePicker = false
+                },
+                onDismiss = {
                     showDevicePicker = false 
                     viewModel.stopScan()
-                },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Available Gimbals", color = Color.White) },
-                text = {
-                    Column {
-                        if (scannedDevices.isNotEmpty()) {
-                            LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                                items(scannedDevices) { device ->
-                                    val deviceName = try { device.name ?: "Unknown Device" } catch (e: SecurityException) { "Unknown Device" }
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { 
-                                            viewModel.stopScan()
-                                            viewModel.connectGimbal(device.address)
-                                            showDevicePicker = false
-                                        },
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A2A))
-                                    ) {
-                                        Column(modifier = Modifier.padding(12.dp)) {
-                                            Text(deviceName, color = Color.White, fontWeight = FontWeight.Bold)
-                                            Text(device.address, color = Color.Gray, fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            Text(if (isScanning) "Scanning..." else "No devices found.", color = Color.Gray, modifier = Modifier.padding(16.dp))
-                        }
-                    }
-                },
-                confirmButton = { 
-                    TextButton(onClick = { 
-                        showDevicePicker = false 
-                        viewModel.stopScan()
-                    }) { Text("Cancel", color = Color.White) } 
                 }
             )
         }
 
         // Project Management Dialog
         if (showProjectDialog) {
-            AlertDialog(
-                onDismissRequest = { showProjectDialog = false },
-                containerColor = Color(0xFF1E1E1E),
-                title = { Text("Projects", color = Color.White) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val baseDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "GimbalAutoPaths")
-                        if (!baseDir.exists()) baseDir.mkdirs()
-                        val projects = baseDir.listFiles { file -> file.isDirectory }?.map { it.name } ?: emptyList()
-                        
-                        LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
-                            items(projects) { project ->
-                                Card(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { 
-                                        viewModel.setCurrentProject(project)
-                                        showProjectDialog = false 
-                                    },
-                                    colors = CardDefaults.cardColors(containerColor = if (project == currentProject) Color(0xFF009688) else Color(0xFF2A2A2A))
-                                ) {
-                                    Text(project, color = Color.White, modifier = Modifier.padding(16.dp))
-                                }
-                            }
-                        }
-                        
-                        OutlinedTextField(
-                            value = newProjectInput,
-                            onValueChange = { newProjectInput = it },
-                            label = { Text("New Project Name", color = Color.LightGray) },
-                            colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        
-                        Button(
-                            onClick = {
-                                val name = newProjectInput.trim()
-                                if (name.isNotEmpty()) {
-                                    val newDir = File(baseDir, name)
-                                    if (!newDir.exists()) newDir.mkdirs()
-                                    viewModel.setCurrentProject(name)
-                                    newProjectInput = ""
-                                    showProjectDialog = false
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
-                        ) { Text("Create & Select") }
-                    }
+            ProjectManagementDialog(
+                currentProject = currentProject,
+                onSelectProject = { project ->
+                    viewModel.setCurrentProject(project)
+                    showProjectDialog = false
                 },
-                confirmButton = { TextButton(onClick = { showProjectDialog = false }) { Text("Close", color = Color.White) } }
-            )
-        }
-    }
-}
-
-@Composable
-fun CameraPreview(
-    modifier: Modifier = Modifier,
-    cameraLens: Int = androidx.camera.core.CameraSelector.LENS_FACING_BACK,
-    cameraMode: String = "Normal",
-    onVideoCaptureReady: (VideoCapture<Recorder>) -> Unit,
-    onImageCaptureReady: (androidx.camera.core.ImageCapture) -> Unit
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
-    val isPermissionGranted = remember {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    }
-
-    val recorder = remember(cameraMode) {
-        val builder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HIGHEST))
-        // High speed capability config logic would go here if needed via CameraX 1.5.0
-        builder.build()
-    }
-    val videoCapture = remember(recorder) { VideoCapture.withOutput(recorder) }
-    val imageCapture = remember { androidx.camera.core.ImageCapture.Builder().build() }
-
-    LaunchedEffect(videoCapture, imageCapture) {
-        onVideoCaptureReady(videoCapture)
-        onImageCaptureReady(imageCapture)
-    }
-
-    DisposableEffect(lifecycleOwner) {
-        onDispose {
-            try {
-                val cameraProvider = androidx.camera.lifecycle.ProcessCameraProvider.getInstance(context).get()
-                cameraProvider.unbindAll()
-            } catch (exc: Exception) {
-                android.util.Log.e("CameraPreview", "Failed to unbind camera", exc)
-            }
-        }
-    }
-
-    if (isPermissionGranted) {
-        AndroidView(
-            factory = { ctx ->
-                androidx.camera.view.PreviewView(ctx).apply {
-                    scaleType = androidx.camera.view.PreviewView.ScaleType.FILL_CENTER
-                    implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
-                }
-            },
-            modifier = modifier,
-            update = { previewView ->
-                val cameraProviderFuture = androidx.camera.lifecycle.ProcessCameraProvider.getInstance(previewView.context)
-                cameraProviderFuture.addListener({
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = androidx.camera.core.Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-                    val cameraSelector = androidx.camera.core.CameraSelector.Builder()
-                        .requireLensFacing(cameraLens)
-                        .build()
-
-                    try {
-                        cameraProvider.unbindAll()
-                        val useCases = mutableListOf<androidx.camera.core.UseCase>(preview)
-                        if (cameraMode == "Timelapse") {
-                            useCases.add(imageCapture)
-                        } else {
-                            useCases.add(videoCapture)
-                        }
-                        
-                        cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            cameraSelector,
-                            *useCases.toTypedArray()
-                        )
-                    } catch (exc: Exception) {
-                        android.util.Log.e("CameraPreview", "Use case binding failed", exc)
-                    }
-                }, ContextCompat.getMainExecutor(previewView.context))
-            }
-        )
-    } else {
-        Box(modifier = modifier.background(Color.Black), contentAlignment = Alignment.Center) {
-            Text(
-                text = "Camera Permission Required",
-                color = Color.Gray,
-                textAlign = TextAlign.Center,
-                fontSize = 14.sp,
-                fontFamily = FontFamily.Monospace
+                onCreateProject = { name ->
+                    val baseDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "GimbalAutoPaths")
+                    val newDir = File(baseDir, name)
+                    if (!newDir.exists()) newDir.mkdirs()
+                    viewModel.setCurrentProject(name)
+                    showProjectDialog = false
+                },
+                onDismiss = { showProjectDialog = false }
             )
         }
     }
