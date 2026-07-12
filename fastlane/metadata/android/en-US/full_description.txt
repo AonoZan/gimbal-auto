@@ -1,0 +1,7 @@
+Gimbal Auto is a modern Android app for automating DJI Osmo Mobile gimbal motion and camera capture over Bluetooth Low Energy.
+
+Create smooth motion paths with interactive waypoints, preview them in real time, and replay them with precise timing. The app supports BLE telemetry for pitch, yaw, battery level, motor load, and connection status, giving you live feedback while you shoot.
+
+Whether you want cinematic moves, timelapse sequences, slow-motion clips, or simple repeatable motion presets, Gimbal Auto helps you plan and execute them from your phone. You can save and load path presets, switch camera lenses, adjust capture modes, and manage recordings directly from the app.
+
+Built with Jetpack Compose and Kotlin, Gimbal Auto is designed for creators who want more control over gimbal movement and automated media capture.

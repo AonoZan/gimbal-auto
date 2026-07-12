@@ -1,0 +1,1 @@
+Automate DJI Osmo Mobile gimbal moves and camera capture with BLE pathing and waypoint presets.

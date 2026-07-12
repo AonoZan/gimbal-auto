@@ -3,7 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Gemini](https://img.shields.io/badge/GEMINI-5b5b5b?logo=googlegemini)](https://gemini.google.com/)
 
-![Screenshot](screenshot.png)
+![Screenshot](fastlane/metadata/android/en-US/images/screenshot.png)
 
 A modern Android application built with Jetpack Compose and Kotlin, designed for automated trajectory tracking and media capture. This app is designed to work with the **DJI Osmo Mobile 4 (OM4)** gimbal over Bluetooth Low Energy (BLE).
 
